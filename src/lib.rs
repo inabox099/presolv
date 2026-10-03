@@ -4,6 +4,7 @@ pub mod health;
 pub mod query;
 pub mod rate_limiter;
 pub mod system;
+pub mod transport;
 pub mod wire;
 
 #[cfg(feature = "python")]
