@@ -82,7 +82,17 @@ pub fn closed_tcp_addr() -> SocketAddr {
 impl Mock {
     pub async fn spawn(handler: Handler) -> Mock {
         for _ in 0..50 {
-            let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let std_udp = {
+                use socket2::{Domain, Protocol as SockProtocol, Socket, Type};
+                let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(SockProtocol::UDP)).unwrap();
+                s.set_nonblocking(true).unwrap();
+                let _ = s.set_recv_buffer_size(4 * 1024 * 1024);
+                let _ = s.set_send_buffer_size(4 * 1024 * 1024);
+                let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+                s.bind(&addr.into()).unwrap();
+                std::net::UdpSocket::from(s)
+            };
+            let udp = UdpSocket::from_std(std_udp).unwrap();
             let addr = udp.local_addr().unwrap();
             let Ok(tcp) = TcpListener::bind(addr).await else { continue };
             let count = Arc::new(AtomicUsize::new(0));

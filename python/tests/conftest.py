@@ -29,6 +29,8 @@ class MockDns:
         self._threads = []
         for _ in range(50):
             udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            udp.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
             udp.bind(("127.0.0.1", 0))
             port = udp.getsockname()[1]
             tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

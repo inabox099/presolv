@@ -17,6 +17,25 @@ fn net(e: std::io::Error) -> PresolvError {
     PresolvError::Network(e.to_string())
 }
 
+/// Generous UDP socket buffers: presolv is designed for bulk/high-volume resolution (spec §1),
+/// where many concurrent queries multiplex over one pooled socket. Default OS buffer sizes
+/// (commonly ~208KB) can silently drop datagrams under burst load well within normal
+/// operating concurrency; size up front to avoid self-inflicted packet loss.
+const UDP_BUF_BYTES: usize = 4 * 1024 * 1024;
+
+fn bind_udp(addr: SocketAddr) -> Result<std::net::UdpSocket, PresolvError> {
+    use socket2::{Domain, Protocol as SockProtocol, Socket, Type};
+    let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+    let sock = Socket::new(domain, Type::DGRAM, Some(SockProtocol::UDP)).map_err(net)?;
+    sock.set_nonblocking(true).map_err(net)?;
+    let _ = sock.set_recv_buffer_size(UDP_BUF_BYTES);
+    let _ = sock.set_send_buffer_size(UDP_BUF_BYTES);
+    let bind_addr: SocketAddr =
+        if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }.parse().unwrap();
+    sock.bind(&bind_addr.into()).map_err(net)?;
+    Ok(sock.into())
+}
+
 enum Writer {
     Udp(Arc<UdpSocket>),
     Tcp(tokio::sync::Mutex<OwnedWriteHalf>),
@@ -53,10 +72,8 @@ impl Conn {
         let dead = Arc::new(AtomicBool::new(false));
         let (writer, reader) = match protocol {
             Protocol::Udp => {
-                let bind: SocketAddr = if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }
-                    .parse()
-                    .unwrap();
-                let sock = UdpSocket::bind(bind).await.map_err(net)?;
+                let std_sock = bind_udp(addr)?;
+                let sock = UdpSocket::from_std(std_sock).map_err(net)?;
                 sock.connect(addr).await.map_err(net)?;
                 let sock = Arc::new(sock);
                 let task = tokio::spawn(udp_reader(sock.clone(), demux.clone(), dead.clone()));
