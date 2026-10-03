@@ -19,3 +19,13 @@ features = ["python"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
+
+[tool.cibuildwheel]
+build = "cp39-*"            # abi3 wheel: one build per platform covers all Python >= 3.9
+skip = "*-musllinux_i686 *-win32 *_i686"
+test-requires = ["pytest"]
+test-command = "pytest {project}/python/tests -q"
+
+[tool.cibuildwheel.linux]
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+environment = { PATH = "$HOME/.cargo/bin:$PATH" }

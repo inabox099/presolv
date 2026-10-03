@@ -8,7 +8,10 @@ pub enum PresolvError {
     Network(String),
     Protocol(String),
     PoolExhausted,
-    Lame { nameservers: Vec<SocketAddr>, retry_in: Duration },
+    Lame {
+        nameservers: Vec<SocketAddr>,
+        retry_in: Duration,
+    },
 }
 
 impl PresolvError {
@@ -30,7 +33,10 @@ impl fmt::Display for PresolvError {
             PresolvError::Network(m) => write!(f, "network error: {m}"),
             PresolvError::Protocol(m) => write!(f, "protocol error: {m}"),
             PresolvError::PoolExhausted => write!(f, "connection pool exhausted"),
-            PresolvError::Lame { nameservers, retry_in } => write!(
+            PresolvError::Lame {
+                nameservers,
+                retry_in,
+            } => write!(
                 f,
                 "nameserver(s) blacklisted as lame: {nameservers:?} (retry in {:.1}s)",
                 retry_in.as_secs_f64()

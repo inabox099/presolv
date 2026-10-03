@@ -94,7 +94,9 @@ impl Mock {
             };
             let udp = UdpSocket::from_std(std_udp).unwrap();
             let addr = udp.local_addr().unwrap();
-            let Ok(tcp) = TcpListener::bind(addr).await else { continue };
+            let Ok(tcp) = TcpListener::bind(addr).await else {
+                continue;
+            };
             let count = Arc::new(AtomicUsize::new(0));
             let udp = Arc::new(udp);
 
@@ -102,7 +104,9 @@ impl Mock {
             let udp_task = tokio::spawn(async move {
                 let mut buf = vec![0u8; 65535];
                 loop {
-                    let Ok((n, peer)) = u.recv_from(&mut buf).await else { return };
+                    let Ok((n, peer)) = u.recv_from(&mut buf).await else {
+                        return;
+                    };
                     c.fetch_add(1, Ordering::SeqCst);
                     match h(&buf[..n]) {
                         Reply::None | Reply::Close => {}
@@ -123,7 +127,9 @@ impl Mock {
             let (h, c) = (handler.clone(), count.clone());
             let tcp_task = tokio::spawn(async move {
                 loop {
-                    let Ok((stream, _)) = tcp.accept().await else { return };
+                    let Ok((stream, _)) = tcp.accept().await else {
+                        return;
+                    };
                     let (h, c) = (h.clone(), c.clone());
                     tokio::spawn(async move {
                         let (mut r, w) = stream.into_split();
@@ -155,7 +161,11 @@ impl Mock {
                 }
             });
 
-            return Mock { addr, count, tasks: vec![udp_task, tcp_task] };
+            return Mock {
+                addr,
+                count,
+                tasks: vec![udp_task, tcp_task],
+            };
         }
         panic!("could not bind UDP+TCP on the same port");
     }

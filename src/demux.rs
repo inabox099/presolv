@@ -51,7 +51,9 @@ impl Demux {
 
     /// Returns true if the datagram/frame matched an in-flight query.
     pub fn complete(&self, mut resp: Vec<u8>) -> bool {
-        let Some(id) = read_id(&resp) else { return false };
+        let Some(id) = read_id(&resp) else {
+            return false;
+        };
         let pending = self.inner.lock().unwrap().remove(&id);
         let Some(p) = pending else { return false };
         if resp.len() < HEADER_LEN {

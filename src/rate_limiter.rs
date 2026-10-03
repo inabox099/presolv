@@ -17,15 +17,25 @@ pub struct RateLimiter {
 impl RateLimiter {
     pub fn new(rate: Option<f64>, burst: Option<u32>) -> Self {
         let cfg = rate.filter(|r| *r > 0.0).map(|r| {
-            let b = burst.map(|b| b.max(1) as f64).unwrap_or_else(|| r.ceil().max(1.0));
+            let b = burst
+                .map(|b| b.max(1) as f64)
+                .unwrap_or_else(|| r.ceil().max(1.0));
             (r, b)
         });
         let tokens = cfg.map(|(_, b)| b).unwrap_or(0.0);
-        RateLimiter { cfg, bucket: Mutex::new(Bucket { tokens, last: Instant::now() }) }
+        RateLimiter {
+            cfg,
+            bucket: Mutex::new(Bucket {
+                tokens,
+                last: Instant::now(),
+            }),
+        }
     }
 
     pub async fn acquire(&self) {
-        let Some((rate, burst)) = self.cfg else { return };
+        let Some((rate, burst)) = self.cfg else {
+            return;
+        };
         loop {
             let wait = {
                 let mut b = self.bucket.lock().unwrap();
@@ -68,7 +78,10 @@ mod tests {
         assert_eq!(t.elapsed(), Duration::ZERO, "burst of 2 is immediate");
         l.acquire().await;
         let e = t.elapsed();
-        assert!(e >= Duration::from_millis(100) && e < Duration::from_millis(150), "{e:?}");
+        assert!(
+            e >= Duration::from_millis(100) && e < Duration::from_millis(150),
+            "{e:?}"
+        );
     }
 
     #[tokio::test(start_paused = true)]

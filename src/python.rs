@@ -63,7 +63,9 @@ impl NativeEngine {
         if let Some(n) = worker_threads {
             b.worker_threads(n.max(1));
         }
-        let runtime = b.build().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let runtime = b
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         let engine = Arc::new(Engine::new(EngineConfig {
             nameservers: addrs,
@@ -94,7 +96,12 @@ impl NativeEngine {
         });
 
         let handle = runtime.handle().clone();
-        Ok(NativeEngine { runtime: Mutex::new(Some(runtime)), handle, engine, token })
+        Ok(NativeEngine {
+            runtime: Mutex::new(Some(runtime)),
+            handle,
+            engine,
+            token,
+        })
     }
 
     fn session(&self) -> Session {
@@ -140,7 +147,12 @@ impl Session {
             Some((ip, port)) => Some(parse_addr(&ip, port)?),
             None => None,
         };
-        let req = Request { index, wire: wire.into_owned(), nameserver, protocol };
+        let req = Request {
+            index,
+            wire: wire.into_owned(),
+            nameserver,
+            protocol,
+        };
         let (engine, tx, token) = (self.engine.clone(), self.tx.clone(), self.token.clone());
         self.handle.spawn(async move {
             tokio::select! {
@@ -167,7 +179,10 @@ impl Session {
             Ok(b) => (Some(PyBytes::new(py, b)), None, String::new(), vec![], 0.0),
             Err(e) => {
                 let (ns, r) = match e {
-                    PresolvError::Lame { nameservers, retry_in } => (
+                    PresolvError::Lame {
+                        nameservers,
+                        retry_in,
+                    } => (
                         nameservers.iter().map(|a| fmt_addr(*a)).collect(),
                         retry_in.as_secs_f64(),
                     ),
@@ -204,7 +219,11 @@ fn native_version() -> &'static str {
 #[pyfunction]
 fn system_nameservers() -> PyResult<Vec<(String, u16)>> {
     crate::system::system_nameservers()
-        .map(|v| v.into_iter().map(|a| (a.ip().to_string(), a.port())).collect())
+        .map(|v| {
+            v.into_iter()
+                .map(|a| (a.ip().to_string(), a.port()))
+                .collect()
+        })
         .map_err(PyRuntimeError::new_err)
 }
 

@@ -34,7 +34,7 @@ flowchart LR
     C --> D[tokio runtime]
     D --> E[Global rate limiter]
     E --> F["Global connection pool\n(keyed by nameserver, protocol)"]
-    F --> G["hickory-proto transport\n(udp / tcp)"]
+    F --> G["tokio sockets\n(udp / tcp)"]
     G -- wire bytes / error --> C
     C -- "wire bytes / error" --> B
     B -- "dns.message.from_wire() or dict" --> A
@@ -53,7 +53,8 @@ All conversion between `dns.message.Message` objects (or the `dict` response for
 
 ```
 presolv/
-├── Cargo.toml                   # Rust crate (cdylib), hickory-proto, hickory-resolver (system conf only), tokio, pyo3
+├── Cargo.toml                   # Rust crate (cdylib+rlib), tokio, tokio-util, rand, socket2 (UDP buffer sizing),
+│                                 #   hickory-resolver (system conf only), pyo3 (optional "python" feature)
 ├── pyproject.toml               # [tool.maturin] build backend
 ├── src/
 │   ├── lib.rs                   # #[pymodule] entry point; registers Resolver, ResultIter, exceptions
@@ -62,11 +63,17 @@ presolv/
 │   ├── rate_limiter.rs          # Global token-bucket rate limiter
 │   ├── health.rs                # Per-nameserver lame-server tracking / blacklist
 │   ├── query.rs                 # Internal Query / QueryResult structs
-│   ├── transport.rs             # hickory-proto based udp/tcp senders
+│   ├── wire.rs                  # DNS message-ID read/write on raw wire bytes
+│   ├── demux.rs                 # per-connection ID rewriting / response correlation registry
+│   ├── transport.rs             # pooled udp/tcp connections on tokio sockets (generous SO_RCVBUF/SNDBUF)
+│   ├── python.rs                # PyO3 bindings (NativeEngine, Session) — feature = "python"
 │   └── error.rs                 # PresolvError enum <-> Python exception mapping
 ├── python/
 │   └── presolv/
-│       ├── __init__.py          # Public API: Resolver, Result, resolve_stream
+│       ├── __init__.py          # Public API re-exports: Resolver, Query, Result, errors
+│       ├── query.py             # Query dataclass
+│       ├── result.py            # Result dataclass
+│       ├── resolver.py          # Resolver: resolve / resolve_stream / close
 │       ├── errors.py            # PresolvError hierarchy (pure Python wrappers)
 │       ├── _convert.py          # wire bytes <-> dns.message.Message / dict conversion
 │       └── _presolv.pyi         # Type stubs for the native extension module
@@ -82,7 +89,7 @@ presolv/
 class Resolver:
     def __init__(
         self,
-        nameservers: list[str] | None = None,
+        nameservers: list[str | tuple[str, int]] | None = None,
         timeout: float = 5.0,
         retries: int = 2,
         rate_limit: float | None = None,
@@ -100,7 +107,7 @@ class Resolver:
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `nameservers` | `None` | Default nameserver(s) used when a `Query` omits one. `None` → parsed once from OS resolver config (`/etc/resolv.conf` on Unix, platform equivalent on Windows) at construction time. |
+| `nameservers` | `None` | Default nameserver(s) used when a `Query` omits one. Entries are IP-literal strings (port 53) or `(ip, port)` tuples. `None` → parsed once from OS resolver config (`/etc/resolv.conf` on Unix, platform equivalent on Windows) at construction time. |
 | `timeout` | `5.0` | Per-attempt timeout in seconds (not cumulative across retries). Each attempt's timeout covers connection-pool acquisition, send, and response wait — a query's worst-case wall time is therefore `(retries + 1) * timeout` plus any rate-limiter wait. |
 | `retries` | `2` | Number of retry attempts after the first failed attempt. Only `DnsTimeoutError` and transient `NetworkError` failures are retried; `ConnectionPoolExhausted` and `ProtocolError` are never retried. Each attempt (including retries) consumes its own rate-limiter token. When the resolver has multiple nameservers and the query does not pin one, each retry advances to the next nameserver in the list (see §9). |
 | `rate_limit` | `None` | Global queries-per-second cap across *all* nameservers/protocols. `None` = unlimited. |
@@ -160,7 +167,7 @@ class Query:
 
 - `message`: a pre-built `dns.message.Message` (e.g. from `dns.message.make_query`, or a non-query message such as an update). Mutually exclusive with `qname`. When provided, it is used as-is — none of the flag fields below are applied.
 - `qname`: the query name as a string (e.g. `"example.com"`), used together with `rdtype` to build a simple query internally. Mutually exclusive with `message`.
-- `port`: target nameserver port. `None` (default) uses port 53.
+- `port`: target nameserver port. `None` (default) uses port 53. Must be in `1..65535`, else `ValueError`.
 - `rdtype`: record type for the `qname` shorthand, as a string or int (e.g. `"A"`, `"AAAA"`, `"MX"`). Defaults to `"A"`. Ignored when `message` is provided.
 - `nameserver`: target nameserver address as a bare IPv4 or IPv6 literal (e.g. `"8.8.8.8"`, `"2001:4860:4860::8888"`), validated with `ipaddress.ip_address` at construction — `"ip:port"` strings, bracketed IPv6, and hostnames raise `ValueError`; the port goes in the separate `port` field. `None` (default) falls back to the `Resolver`'s configured `nameservers` (selection policy in §9).
 - `protocol`: one of `"udp"` (default) or `"tcp"` (see §8). An unsupported value raises `ValueError` at `Query` construction time — invalid protocols never reach the engine.
@@ -220,7 +227,7 @@ def resolve_stream(
 - A blocking, callback-driven variant of `resolve`, built on the same engine. Intended for broker consume-loops where the caller wants to perform an action (e.g. commit a Kafka offset, `ack` a RabbitMQ message) immediately after each result is available, rather than pulling from an iterator.
 - `on_result` is invoked once per completed query, in completion order, with the corresponding `Result`.
 - `source` is drained by the same dedicated feeder thread mechanism as `resolve` (see §5.3).
-- `on_error`, if provided, is invoked for engine-level errors that are not tied to a specific query (e.g. unexpected internal failures); per-query failures are still delivered via `Result.error` inside `on_result` unless `raise_on_error=True`, in which case they propagate out of `resolve_stream`. When an exception propagates out of `resolve_stream` (from `raise_on_error=True` or from `on_result` itself raising), draining of `source` stops, in-flight queries are cancelled best-effort, and their results are discarded.
+- `on_error`, if provided, is invoked for engine-level errors that are not tied to a specific query (e.g. unexpected internal failures) **and for failures raised by iterating `source` itself** (otherwise such failures propagate), after which draining stops; per-query failures are still delivered via `Result.error` inside `on_result` unless `raise_on_error=True`, in which case they propagate out of `resolve_stream`. When an exception propagates out of `resolve_stream` (from `raise_on_error=True` or from `on_result` itself raising), draining of `source` stops, in-flight queries are cancelled best-effort, and their results are discarded.
 - Presolv ships no broker-specific code for this method — see §11 for usage patterns.
 
 ### 5.5 `Result`
@@ -312,7 +319,7 @@ Conventions:
 - Per-query lifecycle inside the Rust core (steps 2–4 constitute one *attempt*, bounded by `timeout`; rate-limiter wait in step 1 is *not* counted against `timeout`):
   1. Acquire a permit from the global rate limiter (blocks if `rate_limit` is set and exhausted; each attempt, including retries, consumes one token).
   2. Acquire or open a pooled connection for the `(nameserver, protocol)` key. Pool acquisition counts against the attempt's `timeout`; if no connection is obtained in time, the query fails with `ConnectionPoolExhausted` (not retried).
-  3. Send the wire bytes asynchronously via the appropriate `hickory-proto` transport.
+  3. Send the wire bytes asynchronously over the pooled tokio UDP/TCP connection (RFC 1035 two-byte length framing on TCP).
   4. Await the response within the remainder of the attempt's `timeout`.
   5. On timeout or transient network error, retry up to `retries` times; when using resolver-default nameservers, each retry advances to the next non-blacklisted nameserver in the list (§9). `ConnectionPoolExhausted`, `ProtocolError`, and `LameServerError` are never retried.
   5b. After each attempt, the target nameserver's health state is updated: success resets its consecutive-failure counter; a timeout or network error increments it and may trigger blacklisting (§9).
@@ -322,9 +329,9 @@ Conventions:
 **Response correlation & message-ID rewriting:**
 
 - Pooled connections (UDP sockets and TCP streams alike) are shared by many concurrent queries, so responses must be demultiplexed. The engine correlates responses to queries by the 16-bit DNS message ID.
-- To make this collision-proof, the Rust core **rewrites** each outgoing query's message ID to an engine-generated value that is unique among in-flight queries on that `(nameserver, protocol)` connection, and keeps an `engine-id → (original-id, index)` map. When the response arrives, the engine restores the original ID in the response wire bytes before handing them back to Python.
+- To make this collision-proof, the Rust core **rewrites** each outgoing query's message ID to an engine-generated value that is unique among in-flight queries on that `(nameserver, protocol)` connection, and keeps an `engine-id → original-id` map (the engine's outer retry/correlation layer tracks `index` separately). When the response arrives, the engine restores the original ID in the response wire bytes before handing them back to Python.
 - This is fully transparent to callers: `Result.response.id` always equals the ID of the submitted query message. It also makes duplicate caller-supplied IDs (including ID `0`, or many identical pre-built messages) safe — no serialization or failure on ID collision.
-- A response whose ID matches no in-flight query on that connection is discarded (and counts as no response — the query eventually times out).
+- A response whose ID matches no in-flight query on that connection is discarded (and counts as no response — the query eventually times out). A response ≥ 2 bytes but shorter than the 12-byte DNS header whose ID *does* match an in-flight query yields `ProtocolError`; the Rust core performs no other wire validation beyond the ID.
 - **Security trade-off (documented, accepted for v1):** pooled, long-lived UDP sockets mean a fixed source port per `(nameserver, protocol)` key, so off-path spoofing resistance rests on message-ID randomness alone — weaker than per-query ephemeral source ports. Presolv targets bulk resolution against operator-chosen/trusted resolvers; it is not hardened for resolving over hostile networks. This caveat belongs in user-facing docs.
 
 ## 7. Rate limiting & connection pooling
@@ -335,7 +342,7 @@ Conventions:
 
 ## 8. Protocol support
 
-- Supported in v1: `"udp"` and `"tcp"`, via `hickory-proto`. Default port 53 for both.
+- Supported in v1: `"udp"` and `"tcp"`, on tokio sockets. Default port 53 for both. UDP sockets are sized with a generous `SO_RCVBUF`/`SO_SNDBUF` (4MiB) — many concurrent queries multiplex over one pooled socket, and default OS buffer sizes (commonly ~208KB) can silently drop datagrams under burst load well within normal operating concurrency.
 - `"tls"` (DNS-over-TLS / DoT) and `"https"` (DNS-over-HTTPS) are explicitly **out of scope for v1** due to the added complexity of certificate handling (server-name verification, CA configuration) and, for DoH, an HTTP client stack; both are documented as candidate future extensions (§14).
 - An unsupported protocol string raises `ValueError` at `Query` construction time (§5.2); it never reaches the engine.
 - **UDP truncation (TC bit)**: v1 performs **no automatic TCP fallback**. A truncated response is returned as-is (a valid `Result.response` with the TC flag set); the caller may inspect the flag and resubmit the query with `protocol="tcp"`.

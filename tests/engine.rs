@@ -11,7 +11,12 @@ use common::*;
 use tokio::time::Instant;
 
 fn req(index: usize, tag: u8, ns: Option<SocketAddr>, protocol: Protocol) -> Request {
-    Request { index, wire: query(0x0042, tag), nameserver: ns, protocol }
+    Request {
+        index,
+        wire: query(0x0042, tag),
+        nameserver: ns,
+        protocol,
+    }
 }
 
 fn fast(ns: Vec<SocketAddr>) -> EngineConfig {
@@ -41,7 +46,10 @@ async fn success_returns_response_with_original_id_and_metadata() {
 #[tokio::test]
 async fn timeout_is_retried_retries_times_then_reported() {
     let m = Mock::spawn(drop_handler()).await;
-    let e = Engine::new(EngineConfig { retries: 2, ..fast(vec![m.addr]) });
+    let e = Engine::new(EngineConfig {
+        retries: 2,
+        ..fast(vec![m.addr])
+    });
     let o = e.execute(req(0, b'a', None, Protocol::Udp)).await;
     assert_eq!(o.result, Err(PresolvError::Timeout));
     assert_eq!(m.received(), 3, "1 attempt + 2 retries");
@@ -53,7 +61,10 @@ async fn timeout_is_retried_retries_times_then_reported() {
 async fn retry_fails_over_to_next_nameserver() {
     let bad = Mock::spawn(drop_handler()).await;
     let good = Mock::spawn(echo_handler()).await;
-    let e = Engine::new(EngineConfig { retries: 1, ..fast(vec![bad.addr, good.addr]) });
+    let e = Engine::new(EngineConfig {
+        retries: 1,
+        ..fast(vec![bad.addr, good.addr])
+    });
     let o = e.execute(req(0, b'a', None, Protocol::Udp)).await; // round-robin base 0 => bad first
     assert!(o.result.is_ok());
     assert_eq!(o.nameserver, Some(good.addr));
@@ -67,7 +78,10 @@ async fn initial_pick_is_round_robin() {
     let b = Mock::spawn(echo_handler()).await;
     let e = Engine::new(fast(vec![a.addr, b.addr]));
     for i in 0..4 {
-        e.execute(req(i, b'a', None, Protocol::Udp)).await.result.unwrap();
+        e.execute(req(i, b'a', None, Protocol::Udp))
+            .await
+            .result
+            .unwrap();
     }
     assert_eq!((a.received(), b.received()), (2, 2));
 }
@@ -76,8 +90,13 @@ async fn initial_pick_is_round_robin() {
 async fn pinned_nameserver_is_always_used_even_on_retry() {
     let pinned = Mock::spawn(drop_handler()).await;
     let other = Mock::spawn(echo_handler()).await;
-    let e = Engine::new(EngineConfig { retries: 2, ..fast(vec![other.addr]) });
-    let o = e.execute(req(0, b'a', Some(pinned.addr), Protocol::Udp)).await;
+    let e = Engine::new(EngineConfig {
+        retries: 2,
+        ..fast(vec![other.addr])
+    });
+    let o = e
+        .execute(req(0, b'a', Some(pinned.addr), Protocol::Udp))
+        .await;
     assert_eq!(o.result, Err(PresolvError::Timeout));
     assert_eq!(pinned.received(), 3);
     assert_eq!(other.received(), 0);
@@ -93,15 +112,26 @@ async fn protocol_error_is_not_retried_and_does_not_count_as_lame() {
     });
     for _ in 0..3 {
         let o = e.execute(req(0, b'a', None, Protocol::Udp)).await;
-        assert!(matches!(o.result, Err(PresolvError::Protocol(_))), "{:?}", o.result);
+        assert!(
+            matches!(o.result, Err(PresolvError::Protocol(_))),
+            "{:?}",
+            o.result
+        );
     }
-    assert_eq!(m.received(), 3, "one attempt each, never retried, never blacklisted");
+    assert_eq!(
+        m.received(),
+        3,
+        "one attempt each, never retried, never blacklisted"
+    );
 }
 
 #[tokio::test]
 async fn network_error_is_retried() {
     let dead = closed_tcp_addr();
-    let e = Engine::new(EngineConfig { retries: 2, ..fast(vec![dead]) });
+    let e = Engine::new(EngineConfig {
+        retries: 2,
+        ..fast(vec![dead])
+    });
     let o = e.execute(req(0, b'a', None, Protocol::Tcp)).await;
     assert!(matches!(o.result, Err(PresolvError::Network(_))));
 }
@@ -124,7 +154,10 @@ async fn blacklist_then_fail_fast_then_recover() {
     // all defaults blacklisted => fail fast, no network
     let o = e.execute(req(0, b'a', None, Protocol::Udp)).await;
     match o.result {
-        Err(PresolvError::Lame { nameservers, retry_in }) => {
+        Err(PresolvError::Lame {
+            nameservers,
+            retry_in,
+        }) => {
             assert_eq!(nameservers, vec![m.addr]);
             assert!(retry_in <= Duration::from_millis(400));
         }
@@ -139,7 +172,11 @@ async fn blacklist_then_fail_fast_then_recover() {
 
     tokio::time::sleep(Duration::from_millis(450)).await;
     let o = e.execute(req(0, b'a', None, Protocol::Udp)).await;
-    assert_eq!(o.result, Err(PresolvError::Timeout), "eligible again after expiry");
+    assert_eq!(
+        o.result,
+        Err(PresolvError::Timeout),
+        "eligible again after expiry"
+    );
     assert_eq!(m.received(), 3);
 }
 
@@ -174,7 +211,11 @@ async fn every_attempt_consumes_a_rate_limit_token() {
     });
     let t = Instant::now();
     let _ = e.execute(req(0, b'a', None, Protocol::Udp)).await;
-    assert!(t.elapsed() >= Duration::from_millis(190), "{:?}", t.elapsed());
+    assert!(
+        t.elapsed() >= Duration::from_millis(190),
+        "{:?}",
+        t.elapsed()
+    );
     assert_eq!(m.received(), 3);
 }
 
@@ -194,7 +235,10 @@ async fn rate_limit_wait_does_not_count_against_timeout() {
         })
         .collect();
     for h in hs {
-        assert!(h.await.unwrap().result.is_ok(), "limiter wait must not cause Timeout");
+        assert!(
+            h.await.unwrap().result.is_ok(),
+            "limiter wait must not cause Timeout"
+        );
     }
 }
 

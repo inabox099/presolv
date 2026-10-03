@@ -25,13 +25,22 @@ const UDP_BUF_BYTES: usize = 4 * 1024 * 1024;
 
 fn bind_udp(addr: SocketAddr) -> Result<std::net::UdpSocket, PresolvError> {
     use socket2::{Domain, Protocol as SockProtocol, Socket, Type};
-    let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
     let sock = Socket::new(domain, Type::DGRAM, Some(SockProtocol::UDP)).map_err(net)?;
     sock.set_nonblocking(true).map_err(net)?;
     let _ = sock.set_recv_buffer_size(UDP_BUF_BYTES);
     let _ = sock.set_send_buffer_size(UDP_BUF_BYTES);
-    let bind_addr: SocketAddr =
-        if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }.parse().unwrap();
+    let bind_addr: SocketAddr = if addr.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    }
+    .parse()
+    .unwrap();
     sock.bind(&bind_addr.into()).map_err(net)?;
     Ok(sock.into())
 }
@@ -87,7 +96,13 @@ impl Conn {
                 (Writer::Tcp(tokio::sync::Mutex::new(w)), task)
             }
         };
-        Ok(Conn { demux, writer, reader, dead, last_used: Mutex::new(Instant::now()) })
+        Ok(Conn {
+            demux,
+            writer,
+            reader,
+            dead,
+            last_used: Mutex::new(Instant::now()),
+        })
     }
 
     pub fn is_dead(&self) -> bool {
@@ -116,11 +131,16 @@ impl Conn {
             return Err(PresolvError::Network("connection closed".into()));
         }
         if wire.len() < HEADER_LEN {
-            return Err(PresolvError::Protocol("query shorter than DNS header".into()));
+            return Err(PresolvError::Protocol(
+                "query shorter than DNS header".into(),
+            ));
         }
         let original = read_id(wire).expect("len checked");
         let (id, rx) = self.demux.register(original)?;
-        let _guard = CancelGuard { demux: &self.demux, id };
+        let _guard = CancelGuard {
+            demux: &self.demux,
+            id,
+        };
         self.touch();
 
         let mut out = wire.to_vec();

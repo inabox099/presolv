@@ -42,7 +42,10 @@ impl EngineConfig {
 
 enum Pick {
     Server(SocketAddr),
-    Lame { nameservers: Vec<SocketAddr>, retry_in: Duration },
+    Lame {
+        nameservers: Vec<SocketAddr>,
+        retry_in: Duration,
+    },
     NoServers,
 }
 
@@ -72,7 +75,10 @@ impl Engine {
     fn pick(&self, req: &Request, base: usize, attempt: u32) -> Pick {
         if let Some(a) = req.nameserver {
             return match self.health.blacklisted_for(a) {
-                Some(d) => Pick::Lame { nameservers: vec![a], retry_in: d },
+                Some(d) => Pick::Lame {
+                    nameservers: vec![a],
+                    retry_in: d,
+                },
                 None => Pick::Server(a),
             };
         }
@@ -89,7 +95,10 @@ impl Engine {
                 Some(d) => earliest = Some(earliest.map_or(d, |e| e.min(d))),
             }
         }
-        Pick::Lame { nameservers: ns.clone(), retry_in: earliest.unwrap_or_default() }
+        Pick::Lame {
+            nameservers: ns.clone(),
+            retry_in: earliest.unwrap_or_default(),
+        }
     }
 
     async fn attempt(
@@ -110,14 +119,20 @@ impl Engine {
         for attempt in 0..=self.cfg.retries {
             let target = match self.pick(&req, base, attempt) {
                 Pick::Server(a) => a,
-                Pick::Lame { nameservers, retry_in } => {
+                Pick::Lame {
+                    nameservers,
+                    retry_in,
+                } => {
                     // Later attempts: report the last real failure instead of masking it.
                     return last.unwrap_or_else(|| Outcome {
                         index: req.index,
                         nameserver: nameservers.first().copied(),
                         protocol: req.protocol,
                         rtt_ms: 0.0,
-                        result: Err(PresolvError::Lame { nameservers, retry_in }),
+                        result: Err(PresolvError::Lame {
+                            nameservers,
+                            retry_in,
+                        }),
                     });
                 }
                 Pick::NoServers => {
@@ -134,7 +149,9 @@ impl Engine {
             self.limiter.acquire().await; // not counted against `timeout`
             let t0 = Instant::now();
             let deadline = t0 + self.cfg.timeout;
-            let result = self.attempt(target, req.protocol, &req.wire, deadline).await;
+            let result = self
+                .attempt(target, req.protocol, &req.wire, deadline)
+                .await;
             let rtt_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
             match &result {
@@ -144,8 +161,10 @@ impl Engine {
                 }
                 Err(_) => {} // Protocol / PoolExhausted: neither success nor lame evidence
             }
-            let retryable =
-                matches!(result, Err(PresolvError::Timeout) | Err(PresolvError::Network(_)));
+            let retryable = matches!(
+                result,
+                Err(PresolvError::Timeout) | Err(PresolvError::Network(_))
+            );
             last = Some(Outcome {
                 index: req.index,
                 result,

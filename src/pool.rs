@@ -26,7 +26,11 @@ pub struct Pool {
 
 impl Pool {
     pub fn new(max: usize, idle_timeout: Duration) -> Self {
-        Pool { max: max.max(1), idle_timeout, slots: Mutex::new(HashMap::new()) }
+        Pool {
+            max: max.max(1),
+            idle_timeout,
+            slots: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -41,7 +45,7 @@ impl Pool {
     fn slot_for(&self, key: Key) -> Option<Arc<Slot>> {
         let mut slots = self.slots.lock().unwrap();
         if let Some(s) = slots.get(&key) {
-            if s.cell.get().map_or(false, |c| c.is_dead()) {
+            if s.cell.get().is_some_and(|c| c.is_dead()) {
                 slots.remove(&key);
             } else {
                 return Some(s.clone());
@@ -53,21 +57,19 @@ impl Pool {
                 .filter_map(|(k, s)| Some((*k, s.cell.get()?.idle_since()?)))
                 .min_by_key(|(_, t)| *t)
                 .map(|(k, _)| k);
-            match victim {
-                Some(k) => {
-                    slots.remove(&k);
-                }
-                None => return None,
-            }
+            let k = victim?;
+            slots.remove(&k);
         }
-        let s = Arc::new(Slot { cell: OnceCell::new() });
+        let s = Arc::new(Slot {
+            cell: OnceCell::new(),
+        });
         slots.insert(key, s.clone());
         Some(s)
     }
 
     fn remove_if_same(&self, key: Key, slot: &Arc<Slot>) {
         let mut slots = self.slots.lock().unwrap();
-        if slots.get(&key).map_or(false, |s| Arc::ptr_eq(s, slot)) {
+        if slots.get(&key).is_some_and(|s| Arc::ptr_eq(s, slot)) {
             slots.remove(&key);
         }
     }
@@ -111,12 +113,17 @@ impl Pool {
     pub fn sweep(&self) {
         let now = Instant::now();
         let idle = self.idle_timeout;
-        self.slots.lock().unwrap().retain(|_, s| match s.cell.get() {
-            None => true,
-            Some(c) => {
-                !c.is_dead()
-                    && !c.idle_since().map_or(false, |t| now.duration_since(t) >= idle)
-            }
-        });
+        self.slots
+            .lock()
+            .unwrap()
+            .retain(|_, s| match s.cell.get() {
+                None => true,
+                Some(c) => {
+                    !c.is_dead()
+                        && !c
+                            .idle_since()
+                            .is_some_and(|t| now.duration_since(t) >= idle)
+                }
+            });
     }
 }

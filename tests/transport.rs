@@ -36,7 +36,11 @@ async fn concurrent_queries_with_same_id_are_demuxed() {
         for (r, tag) in [(a, b's'), (b, b'a'), (x, b'b')] {
             let r = r.unwrap();
             assert_eq!(&r[0..2], &[0, 0], "{proto:?}");
-            assert_eq!(*r.last().unwrap(), tag, "{proto:?}: response matched wrong query");
+            assert_eq!(
+                *r.last().unwrap(),
+                tag,
+                "{proto:?}: response matched wrong query"
+            );
         }
     }
 }
@@ -63,7 +67,10 @@ async fn reply_with_unknown_id_is_discarded_then_times_out() {
     .await;
     let c = Conn::connect(m.addr, Protocol::Udp).await.unwrap();
     // (1-in-65536 chance the flipped id collides; ids are random so ignore.)
-    assert_eq!(c.query(&query(5, b'a'), deadline(150)).await, Err(PresolvError::Timeout));
+    assert_eq!(
+        c.query(&query(5, b'a'), deadline(150)).await,
+        Err(PresolvError::Timeout)
+    );
 }
 
 #[tokio::test]
@@ -72,7 +79,10 @@ async fn reply_shorter_than_header_is_protocol_error() {
     for proto in [Protocol::Udp, Protocol::Tcp] {
         let c = Conn::connect(m.addr, proto).await.unwrap();
         let r = c.query(&query(1, b'a'), deadline(1000)).await;
-        assert!(matches!(r, Err(PresolvError::Protocol(_))), "{proto:?}: {r:?}");
+        assert!(
+            matches!(r, Err(PresolvError::Protocol(_))),
+            "{proto:?}: {r:?}"
+        );
     }
 }
 
