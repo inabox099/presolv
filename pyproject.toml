@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "presolv"
+version = "0.1.0"
+description = "High-performance bulk/streaming DNS resolver (Rust core, dnspython API)"
+requires-python = ">=3.9"
+dependencies = ["dnspython>=2.4"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "presolv._presolv"
+features = ["python"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
