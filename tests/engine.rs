@@ -128,7 +128,11 @@ async fn protocol_error_is_not_retried_and_does_not_count_as_lame() {
 #[tokio::test]
 async fn network_error_is_retried() {
     let dead = closed_tcp_addr();
+    // Windows CI runners (Hyper-V loopback) can take noticeably longer than Linux/macOS
+    // to signal connection-refused on a closed port; give it generous headroom so this
+    // test observes the actual Network error rather than timing out first.
     let e = Engine::new(EngineConfig {
+        timeout: Duration::from_millis(2000),
         retries: 2,
         ..fast(vec![dead])
     });

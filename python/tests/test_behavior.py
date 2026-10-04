@@ -29,7 +29,9 @@ def test_timeout_after_retries(mock_dns):
 
 
 def test_network_error_connection_refused():
-    with Resolver(nameservers=["127.0.0.1"], timeout=0.5, retries=0, blacklist_after=None) as r:
+    # Windows CI loopback can be slower than Linux/macOS to signal connection-refused;
+    # generous timeout avoids a spurious DnsTimeoutError there.
+    with Resolver(nameservers=["127.0.0.1"], timeout=2.0, retries=0, blacklist_after=None) as r:
         q = Query(qname="example.com", protocol="tcp", nameserver="127.0.0.1", port=closed_tcp_port())
         res = one(r, q)
     assert isinstance(res.error, NetworkError)
