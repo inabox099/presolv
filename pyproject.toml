@@ -6,8 +6,14 @@ build-backend = "maturin"
 name = "presolv"
 version = "0.1.0"
 description = "High-performance bulk/streaming DNS resolver (Rust core, dnspython API)"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
 requires-python = ">=3.9"
 dependencies = ["dnspython>=2.4"]
+
+[project.urls]
+Repository = "https://github.com/inabox099/presolv"
+Issues = "https://github.com/inabox099/presolv/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
